@@ -635,38 +635,66 @@ void setup() {
     g_activeSsid = g_prefs.getString("ssid", "logolo");
     g_activePass = g_prefs.getString("pass", "rpl11rpl");
 
-    // Wi-Fi Setup: Dual-Mode (STA ke Hotspot/Router + AP Cadangan)
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.setTxPower(WIFI_POWER_17dBm); // RF power optimal untuk stabilitas WPA2/WPA3
+    // Scan WiFi untuk mendiagnosa parameter sinyal & channel target secara akurat
+    Serial.println("\n[WI-FI SCAN] Memindai jaringan sekitar...");
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+    int nNetworks = WiFi.scanNetworks();
+    Serial.printf("[WI-FI SCAN] Ditemukan %d jaringan:\n", nNetworks);
+    int targetChannel = 1;
+    bool foundTarget = false;
+    for (int i = 0; i < nNetworks; i++) {
+        Serial.printf("  -> %s | Ch: %d | RSSI: %d dBm | Auth: %d\n",
+                      WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i), (int)WiFi.encryptionType(i));
+        if (WiFi.SSID(i) == g_activeSsid) {
+            targetChannel = WiFi.channel(i);
+            foundTarget = true;
+        }
+    }
+    if (!foundTarget) {
+        Serial.printf("[WI-FI SCAN WARNING] SSID '%s' tidak terdeteksi dalam jangkauan!\n", g_activeSsid.c_str());
+    }
+
+    // Wi-Fi Setup: Mulai dengan mode STA murni tanpa sleep untuk jabat tangan optimal
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
     WiFi.setAutoReconnect(true);
 
-    // Event listener untuk monitoring detail koneksi
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
             Serial.printf("\n>>> [WI-FI TERHUBUNG] IP Lokal: %s <<<\n", WiFi.localIP().toString().c_str());
             Serial.printf(">>> HP & Laptop dapat kirim data ke: %s:8080 <<<\n", WiFi.localIP().toString().c_str());
             g_idleStaticDrawn = false;
         } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-            Serial.printf("[WI-FI STA] Terputus (reason: %d). Mencoba rekoneksi...\n", info.wifi_sta_disconnected.reason);
+            Serial.printf("[WI-FI STA] Gagal konek (reason: %d)\n", info.wifi_sta_disconnected.reason);
         }
     });
 
-    // Inisialisasi SoftAP cadangan di Channel 1 (selaras dengan logolo)
+    Serial.printf("[WI-FI STA] Menyambungkan ke '%s' (Pass: '%s')...\n",
+                  g_activeSsid.c_str(), g_activePass.c_str());
+    WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
+
+    // Beri waktu 5 detik untuk jabat tangan STA murni
+    uint32_t tConnStart = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - tConnStart < 5000)) {
+        delay(200);
+        Serial.print(".");
+    }
+    Serial.println();
+
     const char* ap_ssid = "SpideyNav-AP";
     const char* ap_pass = "12345678";
-    WiFi.softAP(ap_ssid, ap_pass, 1);
 
-    // Mulai koneksi ke Hotspot target dengan konfigurasi WPA3 H2E + Hunt-and-Peck
-    Serial.printf("\n[WI-FI STA] Menyambungkan ke: %s ...\n", g_activeSsid.c_str());
-    WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
-    wifi_config_t staConf;
-    if (esp_wifi_get_config(WIFI_IF_STA, &staConf) == ESP_OK) {
-        staConf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; // Dukung Hotspot HP WPA3 H2E & WPA2
-        staConf.sta.pmf_cfg.capable = true;
-        staConf.sta.pmf_cfg.required = false;
-        esp_wifi_set_config(WIFI_IF_STA, &staConf);
-        esp_wifi_connect();
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WI-FI] Sukses terhubung ke Hotspot! SoftAP cadangan tetap siaga.");
+    } else {
+        Serial.println("[WI-FI] Hotspot belum terhubung. Mengaktifkan mode Dual AP_STA...");
     }
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(ap_ssid, ap_pass);
 
     tcpMapServer.begin();
     hudServer.begin();
@@ -689,17 +717,9 @@ void loop() {
     if (millis() - s_lastWifiCheck > 8000) {
         s_lastWifiCheck = millis();
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.printf("[WI-FI STA] Reconnecting ke %s...\n", g_activeSsid.c_str());
+            Serial.printf("[WI-FI STA] Mencoba rekoneksi ke %s...\n", g_activeSsid.c_str());
             WiFi.disconnect();
             WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
-            wifi_config_t retryConf;
-            if (esp_wifi_get_config(WIFI_IF_STA, &retryConf) == ESP_OK) {
-                retryConf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-                retryConf.sta.pmf_cfg.capable = true;
-                retryConf.sta.pmf_cfg.required = false;
-                esp_wifi_set_config(WIFI_IF_STA, &retryConf);
-                esp_wifi_connect();
-            }
         }
     }
 
