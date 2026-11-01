@@ -33,7 +33,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 
 // ---------------------------------------------------------------------------
 // Design tokens: strict 3-tone palette
@@ -51,12 +51,7 @@ const List<Shadow> kMapTextShadow = [
 final String _kMapboxToken = const bool.hasEnvironment('MAPBOX_TOKEN')
     ? const String.fromEnvironment('MAPBOX_TOKEN')
     : String.fromCharCodes(<int>[
-        112, 107, 46, 101, 121, 74, 49, 73, 106, 111, 105, 90, 50, 108, 120, 90, 88,
-        74, 122, 99, 121, 73, 115, 73, 109, 69, 105, 79, 105, 74, 106, 98, 88, 89,
-        50, 90, 72, 86, 110, 78, 122, 107, 119, 90, 122, 90, 48, 77, 110, 112, 119,
-        100, 122, 107, 51, 98, 72, 112, 120, 98, 110, 69, 121, 73, 110, 48, 46, 109,
-        51, 85, 122, 101, 86, 115, 66, 85, 72, 115, 120, 105, 53, 51, 76, 122, 48,
-        106, 75, 54, 103,
+        112, 107, 46, 101, 121, 74, 49, 73, 106, 111, 105, 90, 50, 120, 112, 101, 71, 86, 121, 99, 121, 73, 115, 73, 109, 69, 105, 79, 105, 74, 106, 98, 88, 89, 50, 90, 72, 86, 110, 78, 122, 107, 119, 90, 122, 90, 48, 77, 110, 112, 119, 100, 122, 107, 51, 98, 72, 112, 120, 98, 110, 69, 50, 73, 110, 48, 46, 109, 51, 85, 122, 101, 86, 115, 66, 85, 72, 115, 120, 105, 53, 51, 76, 122, 48, 106, 75, 54, 103,
       ]);
 
 void main() {
@@ -160,7 +155,7 @@ class _CockpitPageState extends State<CockpitPage> {
   double _heading = 0;
   DateTime? _lastFix;
 
-  // Route
+  // Route & Pin-pointing
   List<LatLng> _route = [];
   List<RouteStep> _steps = [];
   int _stepIdx = 1;
@@ -169,6 +164,8 @@ class _CockpitPageState extends State<CockpitPage> {
   double _routeMeters = 0;
   bool _routing = false;
   DateTime _lastReroute = DateTime.fromMillisecondsSinceEpoch(0);
+  LatLng? _pinPoint;
+  String? _pinName;
 
   // ESP32 link
   String _host = '192.168.4.1';
@@ -297,6 +294,14 @@ class _CockpitPageState extends State<CockpitPage> {
     }
     setState(() => _follow = true);
     if (_mapReady) _map.move(p, 16.5);
+  }
+
+  void _onMapTap(LatLng point) {
+    HapticFeedback.lightImpact();
+    setState(() {
+      _pinPoint = point;
+      _pinName = 'Titik Pilihan Peta';
+    });
   }
 
   // ----- Routing -----
@@ -528,6 +533,7 @@ class _CockpitPageState extends State<CockpitPage> {
       builder: (ctx) => _SearchSheet(
         hasRoute: _dest != null,
         destName: _destName,
+        userLocation: _pos,
         onPick: (pt, name) {
           Navigator.of(ctx).pop();
           _routeTo(pt, name);
@@ -747,11 +753,90 @@ class _CockpitPageState extends State<CockpitPage> {
             right: 16,
             child: _buildTopArea(),
           ),
+          if (_pinPoint != null && _dest == null)
+            Positioned(
+              bottom: mq.padding.bottom + 85,
+              left: 16,
+              right: 16,
+              child: Center(child: _buildPinCard()),
+            ),
           Positioned(
             bottom: mq.padding.bottom + 20,
             left: 0,
             right: 0,
             child: Center(child: _buildDock()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPinCard() {
+    final dist = _pos != null && _pinPoint != null
+        ? _dist.as(LengthUnit.Meter, _pos!, _pinPoint!)
+        : 0.0;
+    return LiquidGlass(
+      radius: BorderRadius.circular(24),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: kCrimson.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.place, color: kCrimson, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _pinName ?? 'Titik Pilihan Peta',
+                style: const TextStyle(
+                  color: kWhite,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+              if (_pos != null)
+                Text(
+                  '${_fmtDist(dist)} dari posisi Anda',
+                  style: TextStyle(
+                    color: kWhite.withValues(alpha: 0.7),
+                    fontSize: 11,
+                    fontFeatures: kTabular,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 14),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: kCrimson,
+              foregroundColor: kWhite,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: () {
+              final pt = _pinPoint!;
+              setState(() => _pinPoint = null);
+              _routeTo(pt, _pinName ?? 'Titik Pilihan Peta');
+            },
+            icon: const Icon(Icons.directions_bike, size: 16),
+            label: const Text(
+              'Rute Tercepat',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.close, color: kWhite, size: 18),
+            tooltip: 'Batal Pin',
+            onPressed: () => setState(() => _pinPoint = null),
           ),
         ],
       ),
@@ -771,6 +856,26 @@ class _CockpitPageState extends State<CockpitPage> {
               color: kCrimson,
               border: Border.all(color: kWhite, width: 3),
             ),
+          ),
+        ),
+      if (_pinPoint != null && _dest == null)
+        Marker(
+          point: _pinPoint!,
+          width: 42,
+          height: 42,
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: kCrimson,
+              border: Border.all(color: kWhite, width: 2.5),
+              boxShadow: [
+                BoxShadow(
+                  color: kCrimson.withValues(alpha: 0.65),
+                  blurRadius: 14,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.place, color: kWhite, size: 22),
           ),
         ),
       if (_pos != null)
@@ -793,6 +898,8 @@ class _CockpitPageState extends State<CockpitPage> {
         interactionOptions: InteractionOptions(
           flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
         ),
+        onTap: (tapPosition, point) => _onMapTap(point),
+        onLongPress: (tapPosition, point) => _onMapTap(point),
         onMapReady: () {
           _mapReady = true;
           final p = _pos;
@@ -844,99 +951,101 @@ class _CockpitPageState extends State<CockpitPage> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      '${_speedKmh.round()}',
-                      style: const TextStyle(
-                        color: kWhite,
-                        fontSize: 32,
-                        fontWeight: FontWeight.w700,
-                        fontFeatures: kTabular,
-                        shadows: kMapTextShadow,
+            LiquidGlass(
+              radius: BorderRadius.circular(18),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        '${_speedKmh.round()}',
+                        style: const TextStyle(
+                          color: kWhite,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: kTabular,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 4),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'km/h',
+                        style: TextStyle(
+                          color: kWhite,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_routing)
                     const Text(
-                      'km/h',
+                      'Menghitung rute...',
                       style: TextStyle(
                         color: kWhite,
-                        fontSize: 11,
+                        fontSize: 10,
                         fontWeight: FontWeight.w500,
-                        letterSpacing: 0.2,
-                        shadows: kMapTextShadow,
+                      ),
+                    )
+                  else if (_dest != null)
+                    Text(
+                      '${_fmtDist(_routeMeters)} total',
+                      style: const TextStyle(
+                        color: kWhite,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        fontFeatures: kTabular,
                       ),
                     ),
-                  ],
-                ),
-                if (_routing)
-                  const Text(
-                    'Calculating route',
-                    style: TextStyle(
-                        color: kWhite,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.2,
-                        shadows: kMapTextShadow),
-                  )
-                else if (_dest != null)
-                  Text(
-                    '${_fmtDist(_routeMeters)} total',
-                    style: const TextStyle(
-                        color: kWhite,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.2,
-                        fontFeatures: kTabular,
-                        shadows: kMapTextShadow),
-                  ),
-              ],
+                ],
+              ),
             ),
             const Spacer(),
             if (step != null)
               Flexible(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            _fmtDist(_nextStepMeters),
-                            style: const TextStyle(
-                              color: kWhite,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              fontFeatures: kTabular,
-                              shadows: kMapTextShadow,
+                child: LiquidGlass(
+                  radius: BorderRadius.circular(18),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _fmtDist(_nextStepMeters),
+                              style: const TextStyle(
+                                color: kWhite,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                fontFeatures: kTabular,
+                              ),
                             ),
-                          ),
-                          Text(
-                            _turnText(step),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                              color: kWhite,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              letterSpacing: 0.2,
-                              shadows: kMapTextShadow,
+                            Text(
+                              _turnText(step),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                color: kWhite,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(_turnIcon(step),
-                        color: kWhite, size: 36, shadows: kMapTextShadow),
-                  ],
+                      const SizedBox(width: 8),
+                      Icon(_turnIcon(step), color: kCrimson, size: 30),
+                    ],
+                  ),
                 ),
               ),
           ],
@@ -1092,11 +1201,18 @@ class LiquidGlass extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: radius,
-            color: kWhite.withValues(alpha: 0.10),
+            color: kNavy.withValues(alpha: 0.72),
             border: Border.all(
-              color: kWhite.withValues(alpha: 0.14),
-              width: 0.5,
+              color: kWhite.withValues(alpha: 0.20),
+              width: 0.8,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Stack(
             children: [
@@ -1106,8 +1222,8 @@ class LiquidGlass extends StatelessWidget {
                 top: 0,
                 left: radius.topLeft.x * 0.7,
                 right: radius.topRight.x * 0.7,
-                height: 0.5,
-                child: ColoredBox(color: Colors.white.withValues(alpha: 0.28)),
+                height: 0.8,
+                child: ColoredBox(color: Colors.white.withValues(alpha: 0.45)),
               ),
             ],
           ),
@@ -1262,9 +1378,16 @@ class _Puck extends StatelessWidget {
 // Route search sheet (Nominatim geocoding)
 // ---------------------------------------------------------------------------
 class _Place {
-  _Place(this.name, this.point);
+  const _Place({
+    required this.name,
+    required this.subtitle,
+    required this.point,
+    this.typeIcon = Icons.place,
+  });
   final String name;
+  final String subtitle;
   final LatLng point;
+  final IconData typeIcon;
 }
 
 class _SearchSheet extends StatefulWidget {
@@ -1273,10 +1396,12 @@ class _SearchSheet extends StatefulWidget {
     required this.destName,
     required this.onPick,
     required this.onClear,
+    this.userLocation,
   });
 
   final bool hasRoute;
   final String destName;
+  final LatLng? userLocation;
   final void Function(LatLng point, String name) onPick;
   final VoidCallback onClear;
 
@@ -1300,7 +1425,8 @@ class _SearchSheetState extends State<_SearchSheet> {
 
   void _onChanged(String q) {
     _debounce?.cancel();
-    if (q.trim().length < 3) {
+    final trimmed = q.trim();
+    if (trimmed.length < 2) {
       setState(() {
         _results = [];
         _message = null;
@@ -1308,8 +1434,7 @@ class _SearchSheetState extends State<_SearchSheet> {
       });
       return;
     }
-    _debounce =
-        Timer(const Duration(milliseconds: 700), () => _search(q.trim()));
+    _debounce = Timer(const Duration(milliseconds: 300), () => _search(trimmed));
   }
 
   Future<void> _search(String q) async {
@@ -1318,34 +1443,111 @@ class _SearchSheetState extends State<_SearchSheet> {
       _message = null;
     });
     try {
-      final r = await http.get(
-        Uri.https('nominatim.openstreetmap.org', '/search', {
-          'format': 'jsonv2',
-          'limit': '6',
-          'q': q,
-        }),
-        headers: {'User-Agent': 'SpideyCompanion/1.0'},
-      ).timeout(const Duration(seconds: 10));
+      final userLat = widget.userLocation?.latitude ?? -6.905;
+      final userLon = widget.userLocation?.longitude ?? 108.498;
+
+      // 1. Primary Engine: Photon Geocoder (Komoot OSM) with Proximity Bias
+      final photonUri = Uri.https('photon.komoot.io', '/api/', {
+        'q': q,
+        'lat': '$userLat',
+        'lon': '$userLon',
+        'limit': '10',
+      });
+
+      final r = await http.get(photonUri, headers: {'User-Agent': 'SpideyNav/1.0'})
+          .timeout(const Duration(seconds: 4));
+
+      if (r.statusCode == 200) {
+        final json = jsonDecode(r.body) as Map<String, dynamic>;
+        final features = (json['features'] as List? ?? []);
+        if (features.isNotEmpty) {
+          final places = features.map((f) {
+            final props = f['properties'] as Map<String, dynamic>? ?? {};
+            final geom = f['geometry'] as Map<String, dynamic>? ?? {};
+            final coords = geom['coordinates'] as List? ?? [userLon, userLat];
+            final title = props['name']?.toString() ?? props['street']?.toString() ?? q;
+            final sub = [
+              props['street'],
+              props['district'],
+              props['city'] ?? props['county'],
+              props['state'],
+            ].where((s) => s != null && s.toString().trim().isNotEmpty && s != title).join(', ');
+
+            final osmVal = props['osm_value']?.toString() ?? '';
+            final icon = switch (osmVal) {
+              'school' || 'college' || 'university' => Icons.school,
+              'hospital' || 'clinic' || 'pharmacy' => Icons.local_hospital,
+              'place_of_worship' => Icons.mosque,
+              'restaurant' || 'cafe' || 'fast_food' => Icons.restaurant,
+              'fuel' => Icons.local_gas_station,
+              _ => Icons.place,
+            };
+
+            return _Place(
+              name: title,
+              subtitle: sub.isEmpty ? 'Indonesia' : sub,
+              point: LatLng((coords[1] as num).toDouble(), (coords[0] as num).toDouble()),
+              typeIcon: icon,
+            );
+          }).toList();
+
+          if (!mounted) return;
+          setState(() {
+            _results = places;
+            _busy = false;
+            _message = null;
+          });
+          return;
+        }
+      }
+
+      // 2. Secondary Engine: Nominatim OpenStreetMap (ID restricted)
+      final nomUri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'format': 'jsonv2',
+        'limit': '8',
+        'countrycodes': 'id',
+        'q': q,
+      });
+
+      final rNom = await http.get(nomUri, headers: {'User-Agent': 'SpideyNav/1.0'})
+          .timeout(const Duration(seconds: 5));
+
       if (!mounted) return;
-      if (r.statusCode != 200) throw Exception('status ${r.statusCode}');
-      final list = jsonDecode(r.body) as List;
-      final places = list
-          .map((e) => _Place(
-                (e['display_name'] ?? '') as String,
-                LatLng(double.parse(e['lat'] as String),
-                    double.parse(e['lon'] as String)),
-              ))
-          .toList();
+      if (rNom.statusCode == 200) {
+        final list = jsonDecode(rNom.body) as List;
+        final places = list.map((e) {
+          final displayName = (e['display_name'] ?? '') as String;
+          final parts = displayName.split(',');
+          final name = parts.isNotEmpty ? parts.first.trim() : q;
+          final sub = parts.length > 1
+              ? parts.sublist(1, math.min(4, parts.length)).join(',').trim()
+              : 'Indonesia';
+          return _Place(
+            name: name,
+            subtitle: sub,
+            point: LatLng(
+                double.parse(e['lat'] as String), double.parse(e['lon'] as String)),
+            typeIcon: Icons.place,
+          );
+        }).toList();
+
+        setState(() {
+          _results = places;
+          _busy = false;
+          _message = places.isEmpty ? 'Tempat tidak ditemukan' : null;
+        });
+        return;
+      }
+
       setState(() {
-        _results = places;
         _busy = false;
-        _message = places.isEmpty ? 'No results' : null;
+        _message = 'Tempat tidak ditemukan';
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _message = 'Search unavailable. Check connection.';
+        _message = 'Pencarian tidak tersedia. Periksa koneksi internet.';
       });
     }
   }
@@ -1356,7 +1558,7 @@ class _SearchSheetState extends State<_SearchSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 14, 20, 20 + bottom),
       child: SizedBox(
-        height: 420,
+        height: 440,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1377,12 +1579,12 @@ class _SearchSheetState extends State<_SearchSheet> {
               onChanged: _onChanged,
               textInputAction: TextInputAction.search,
               onSubmitted: (v) {
-                if (v.trim().length >= 3) _search(v.trim());
+                if (v.trim().length >= 2) _search(v.trim());
               },
-              style: const TextStyle(color: kWhite, fontSize: 16),
+              style: const TextStyle(color: kWhite, fontSize: 15),
               decoration: InputDecoration(
-                hintText: 'Where to?',
-                hintStyle: TextStyle(color: kWhite.withValues(alpha: 0.6)),
+                hintText: 'Cari sekolah, jalan, tempat tujuan...',
+                hintStyle: TextStyle(color: kWhite.withValues(alpha: 0.55)),
                 prefixIcon: const Icon(Icons.search, color: kWhite),
                 suffixIcon: _busy
                     ? const Padding(
@@ -1413,7 +1615,7 @@ class _SearchSheetState extends State<_SearchSheet> {
                   children: [
                     Expanded(
                       child: Text(
-                        'Active: ${widget.destName}',
+                        'Rute Aktif: ${widget.destName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1424,7 +1626,7 @@ class _SearchSheetState extends State<_SearchSheet> {
                     ),
                     TextButton(
                       onPressed: widget.onClear,
-                      child: const Text('End route',
+                      child: const Text('Hentikan Rute',
                           style: TextStyle(
                               color: kCrimson, fontWeight: FontWeight.w600)),
                     ),
@@ -1446,16 +1648,31 @@ class _SearchSheetState extends State<_SearchSheet> {
                 itemBuilder: (context, i) {
                   final p = _results[i];
                   return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.place_outlined, color: kWhite),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                    leading: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: kWhite.withValues(alpha: 0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(p.typeIcon, color: kCrimson, size: 20),
+                    ),
                     title: Text(
                       p.name,
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: kWhite, fontSize: 14),
+                      style: const TextStyle(
+                          color: kWhite, fontSize: 14, fontWeight: FontWeight.w600),
                     ),
-                    onTap: () => widget.onPick(
-                        p.point, p.name.split(',').first.trim()),
+                    subtitle: Text(
+                      p.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: kWhite.withValues(alpha: 0.65), fontSize: 12),
+                    ),
+                    onTap: () => widget.onPick(p.point, p.name),
                   );
                 },
               ),
@@ -1470,7 +1687,10 @@ class _SearchSheetState extends State<_SearchSheet> {
 // ---------------------------------------------------------------------------
 // Idle animation selector sheet
 // ---------------------------------------------------------------------------
-class _IdleSheet extends StatelessWidget {
+// ---------------------------------------------------------------------------
+// Idle animation selector sheet with live 2.4" TFT HUD simulator
+// ---------------------------------------------------------------------------
+class _IdleSheet extends StatefulWidget {
   const _IdleSheet({
     required this.selected,
     required this.linked,
@@ -1482,10 +1702,34 @@ class _IdleSheet extends StatelessWidget {
   final void Function(int id) onSelect;
 
   @override
+  State<_IdleSheet> createState() => _IdleSheetState();
+}
+
+class _IdleSheetState extends State<_IdleSheet>
+    with SingleTickerProviderStateMixin {
+  late int _currentId;
+  late AnimationController _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentId = widget.selected;
+    _anim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1800))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1500,38 +1744,281 @@ class _IdleSheet extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            const Text('Idle animation',
-                style: TextStyle(
-                    color: kWhite, fontSize: 18, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 4),
-            Text(
-              linked
-                  ? 'Plays on the ESP32 screen when no route is active.'
-                  : 'ESP32 not linked. Selection is sent on connect.',
-              style: TextStyle(
-                  color: kWhite.withValues(alpha: 0.8),
-                  fontSize: 11,
-                  letterSpacing: 0.2),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Animasi Idle Cockpit',
+                  style: TextStyle(
+                    color: kWhite,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: widget.linked
+                        ? const Color(0xFF00FF66).withValues(alpha: 0.15)
+                        : kCrimson.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color:
+                          widget.linked ? const Color(0xFF00FF66) : kCrimson,
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Text(
+                    widget.linked ? 'ESP32 LINKED' : 'SIMULATOR MODE',
+                    style: TextStyle(
+                      color:
+                          widget.linked ? const Color(0xFF00FF66) : kWhite,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: kTabular,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
+            // Live 2.4" TFT Simulator Screen
+            Center(
+              child: Container(
+                width: 220,
+                height: 110,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF050B14),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: kWhite.withValues(alpha: 0.25), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: kCrimson.withValues(alpha: 0.25),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      AnimatedBuilder(
+                        animation: _anim,
+                        builder: (context, child) {
+                          return CustomPaint(
+                            size: const Size(220, 110),
+                            painter: _IdleScreenPainter(
+                              id: _currentId,
+                              t: _anim.value,
+                            ),
+                          );
+                        },
+                      ),
+                      Positioned(
+                        top: 6,
+                        right: 8,
+                        child: Text(
+                          '2.4" TFT HUD',
+                          style: TextStyle(
+                            color: kWhite.withValues(alpha: 0.4),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             for (final a in kIdleAnims)
               ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(a.name,
-                    style: const TextStyle(
-                        color: kWhite, fontWeight: FontWeight.w500)),
-                subtitle: Text(a.detail,
-                    style: TextStyle(
-                        color: kWhite.withValues(alpha: 0.7), fontSize: 12)),
-                trailing: a.id == selected
-                    ? const Icon(Icons.check, color: kCrimson)
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: a.id == _currentId
+                        ? kCrimson.withValues(alpha: 0.25)
+                        : kWhite.withValues(alpha: 0.05),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    switch (a.id) {
+                      0 => Icons.remove_red_eye_outlined,
+                      1 => Icons.radar,
+                      2 => Icons.wifi_tethering,
+                      3 => Icons.speed,
+                      _ => Icons.motion_photos_on,
+                    },
+                    color: a.id == _currentId ? kCrimson : kWhite,
+                    size: 18,
+                  ),
+                ),
+                title: Text(
+                  a.name,
+                  style: TextStyle(
+                    color:
+                        a.id == _currentId ? kWhite : kWhite.withValues(alpha: 0.9),
+                    fontWeight: a.id == _currentId
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    fontSize: 14,
+                  ),
+                ),
+                subtitle: Text(
+                  a.detail,
+                  style: TextStyle(
+                    color: kWhite.withValues(alpha: 0.65),
+                    fontSize: 11,
+                  ),
+                ),
+                trailing: a.id == _currentId
+                    ? const Icon(Icons.check_circle, color: kCrimson, size: 20)
                     : null,
-                onTap: () => onSelect(a.id),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() => _currentId = a.id);
+                  widget.onSelect(a.id);
+                },
               ),
           ],
         ),
       ),
     );
   }
+}
+
+class _IdleScreenPainter extends CustomPainter {
+  const _IdleScreenPainter({required this.id, required this.t});
+  final int id;
+  final double t;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+
+    switch (id) {
+      case 0: // Spider Eyes
+        final blink = (math.sin(t * math.pi * 2) * 0.5 + 0.5);
+        final eyeH = 14.0 + (blink * 10.0);
+        final paintEye = Paint()
+          ..color = kWhite
+          ..style = PaintingStyle.fill;
+        final paintBorder = Paint()
+          ..color = kCrimson
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5;
+
+        // Left eye
+        final pathL = Path()
+          ..moveTo(cx - 36, cy - eyeH)
+          ..lineTo(cx - 8, cy)
+          ..lineTo(cx - 30, cy + eyeH * 0.8)
+          ..close();
+        canvas.drawPath(pathL, paintEye);
+        canvas.drawPath(pathL, paintBorder);
+
+        // Right eye
+        final pathR = Path()
+          ..moveTo(cx + 36, cy - eyeH)
+          ..lineTo(cx + 8, cy)
+          ..lineTo(cx + 30, cy + eyeH * 0.8)
+          ..close();
+        canvas.drawPath(pathR, paintEye);
+        canvas.drawPath(pathR, paintBorder);
+        break;
+
+      case 1: // Spider Web
+        final pLine = Paint()
+          ..color = kWhite.withValues(alpha: 0.35)
+          ..strokeWidth = 1;
+        for (int i = 0; i < 8; i++) {
+          final rad = i * (math.pi / 4);
+          canvas.drawLine(
+            Offset(cx, cy),
+            Offset(cx + math.cos(rad) * 50, cy + math.sin(rad) * 50),
+            pLine,
+          );
+        }
+        final pRing = Paint()
+          ..color = kCrimson.withValues(alpha: 0.7)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2;
+        final offsetPulse = (t * 16) % 16;
+        for (int r = 10; r <= 46; r += 14) {
+          final curR = r + offsetPulse;
+          if (curR <= 50) {
+            canvas.drawCircle(Offset(cx, cy), curR, pRing);
+          }
+        }
+        break;
+
+      case 2: // Pulse Sonar Ring
+        for (int i = 0; i < 3; i++) {
+          final phase = (t + i / 3) % 1.0;
+          final r = phase * 48.0;
+          final pPulse = Paint()
+            ..color = kCrimson.withValues(alpha: (1.0 - phase) * 0.8)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.2;
+          canvas.drawCircle(Offset(cx, cy), r, pPulse);
+        }
+        canvas.drawCircle(
+          Offset(cx, cy),
+          5,
+          Paint()..color = kWhite,
+        );
+        break;
+
+      case 3: // Digital HUD Clock & Speedo
+      default:
+        final now = DateTime.now();
+        final h = '${now.hour}'.padLeft(2, '0');
+        final m = '${now.minute}'.padLeft(2, '0');
+        final s = '${now.second}'.padLeft(2, '0');
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: '$h:$m:$s',
+            style: const TextStyle(
+              color: kWhite,
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              fontFeatures: kTabular,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        textPainter.paint(
+            canvas, Offset(cx - textPainter.width / 2, cy - 20));
+
+        final subPainter = TextPainter(
+          text: const TextSpan(
+            text: '0 KM/H • STANDBY HUD',
+            style: TextStyle(
+              color: kCrimson,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.0,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        subPainter.paint(
+            canvas, Offset(cx - subPainter.width / 2, cy + 10));
+        break;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _IdleScreenPainter oldDelegate) =>
+      oldDelegate.id != id || oldDelegate.t != t;
 }
