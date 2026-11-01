@@ -187,11 +187,19 @@ void drawCyberHudFrame() {
         tft.setTextColor(COLOR_CYAN, 0x1105);
         tft.drawString(netStr, w / 2, pillY + 26, 1);
     } else {
-        tft.setTextColor(COLOR_CYAN, 0x1105);
-        tft.drawString("WIFI: SpideyNav-AP | PORT: 8080", w / 2, pillY + 11, 2);
+        if (WiFi.softAPgetStationNum() > 0) {
+            tft.setTextColor(COLOR_EMERALD, 0x1105);
+            tft.drawString("IP: 192.168.4.1:8080", w / 2, pillY + 11, 2);
 
-        tft.setTextColor(0x7BEF, 0x1105);
-        tft.drawString("MENUNGGU RUTE DARI HP...", w / 2, pillY + 26, 1);
+            tft.setTextColor(COLOR_CYAN, 0x1105);
+            tft.drawString("HP TERHUBUNG KE SPIDEY-AP", w / 2, pillY + 26, 1);
+        } else {
+            tft.setTextColor(COLOR_CYAN, 0x1105);
+            tft.drawString("WIFI: SpideyNav-AP | PORT: 8080", w / 2, pillY + 11, 2);
+
+            tft.setTextColor(0x7BEF, 0x1105);
+            tft.drawString("MENUNGGU RUTE DARI HP...", w / 2, pillY + 26, 1);
+        }
     }
 }
 
@@ -670,6 +678,12 @@ void setup() {
             g_idleStaticDrawn = false;
         } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
             Serial.printf("[WI-FI STA] Gagal konek (reason: %d)\n", info.wifi_sta_disconnected.reason);
+        } else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+            Serial.println("\n>>> [SOFTAP] HP TERHUBUNG KE SpideyNav-AP! <<<");
+            g_idleStaticDrawn = false;
+        } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+            Serial.println("\n>>> [SOFTAP] HP TERPUTUS DARI SpideyNav-AP <<<");
+            g_idleStaticDrawn = false;
         }
     });
 
@@ -712,11 +726,11 @@ void setup() {
 }
 
 void loop() {
-    // 1. Pantau status koneksi Wi-Fi STA dan rekoneksi periodik jika belum terhubung
+    // 1. Pantau status koneksi Wi-Fi STA (Hanya rekoneksi jika TIDAK ada HP yang tersambung ke SoftAP)
     static uint32_t s_lastWifiCheck = 0;
-    if (millis() - s_lastWifiCheck > 8000) {
+    if (millis() - s_lastWifiCheck > 12000) {
         s_lastWifiCheck = millis();
-        if (WiFi.status() != WL_CONNECTED) {
+        if (WiFi.status() != WL_CONNECTED && WiFi.softAPgetStationNum() == 0 && !g_hudClient.connected()) {
             Serial.printf("[WI-FI STA] Mencoba rekoneksi ke %s...\n", g_activeSsid.c_str());
             WiFi.disconnect();
             WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
