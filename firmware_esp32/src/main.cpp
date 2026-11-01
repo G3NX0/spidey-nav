@@ -643,43 +643,19 @@ void setup() {
     g_activeSsid = g_prefs.getString("ssid", "logolo");
     g_activePass = g_prefs.getString("pass", "rpl11rpl");
 
-    // Scan WiFi untuk mendiagnosa parameter sinyal & channel target secara akurat
-    Serial.println("\n[WI-FI SCAN] Memindai jaringan sekitar...");
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
-    int nNetworks = WiFi.scanNetworks();
-    Serial.printf("[WI-FI SCAN] Ditemukan %d jaringan:\n", nNetworks);
-    int targetChannel = 1;
-    bool foundTarget = false;
-    for (int i = 0; i < nNetworks; i++) {
-        Serial.printf("  -> %s | Ch: %d | RSSI: %d dBm | Auth: %d\n",
-                      WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i), (int)WiFi.encryptionType(i));
-        if (WiFi.SSID(i) == g_activeSsid) {
-            targetChannel = WiFi.channel(i);
-            foundTarget = true;
-        }
-    }
-    if (!foundTarget) {
-        Serial.printf("[WI-FI SCAN WARNING] SSID '%s' tidak terdeteksi dalam jangkauan!\n", g_activeSsid.c_str());
-    }
-
-    // Wi-Fi Setup: Mode STA murni, tanpa sleep, daya RF maksimal
-    WiFi.mode(WIFI_STA);
+    // Wi-Fi Setup: Mode SoftAP Murni (Sinyal Super Kuat & Stabil 100%)
+    WiFi.mode(WIFI_AP);
     WiFi.setSleep(false);
     esp_wifi_set_ps(WIFI_PS_NONE);
     WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    WiFi.setAutoReconnect(true);
+
+    const char* ap_ssid = "SpideyNav-AP";
+    const char* ap_pass = "12345678";
+    WiFi.softAP(ap_ssid, ap_pass, 1);
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-            Serial.printf("\n>>> [WI-FI TERHUBUNG] IP Lokal: %s <<<\n", WiFi.localIP().toString().c_str());
-            Serial.printf(">>> HP & Laptop dapat kirim data ke: %s:8080 <<<\n", WiFi.localIP().toString().c_str());
-            g_idleStaticDrawn = false;
-        } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-            Serial.printf("[WI-FI STA] Gagal konek (reason: %d)\n", info.wifi_sta_disconnected.reason);
-        } else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
-            Serial.println("\n>>> [SOFTAP] HP TERHUBUNG KE SpideyNav-AP! <<<");
+        if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+            Serial.println("\n>>> [SOFTAP] HP BERHASIL TERHUBUNG KE SpideyNav-AP! <<<");
             g_idleStaticDrawn = false;
         } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
             Serial.println("\n>>> [SOFTAP] HP TERPUTUS DARI SpideyNav-AP <<<");
@@ -687,28 +663,8 @@ void setup() {
         }
     });
 
-    Serial.printf("[WI-FI STA] Menyambungkan ke '%s' (Pass: '%s')...\n",
-                  g_activeSsid.c_str(), g_activePass.c_str());
-    WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
-
-    // Beri waktu hingga 15 detik agar jabat tangan WPA2 & DHCP IP selesai sempurna
-    uint32_t tConnStart = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - tConnStart < 15000)) {
-        delay(400);
-        Serial.print(".");
-    }
-    Serial.println();
-
-    const char* ap_ssid = "SpideyNav-AP";
-    const char* ap_pass = "12345678";
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[WI-FI] Sukses terhubung ke Hotspot logolo! IP diperoleh.");
-    } else {
-        Serial.println("[WI-FI] Timeout 15s. Mengaktifkan mode Dual AP_STA sebagai cadangan...");
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP(ap_ssid, ap_pass);
-    }
+    Serial.printf("[WI-FI SOFTAP] Memancarkan SSID '%s' (Pass: '%s') - Channel 1 Aktif!\n", ap_ssid, ap_pass);
+    Serial.printf("[COCKPIT HUD ] Gateway: 192.168.4.1 | Port: 8080\n");
 
     tcpMapServer.begin();
     hudServer.begin();
@@ -716,7 +672,6 @@ void setup() {
     Serial.println("\n========================================================");
     Serial.println(" SPIDEY-NAV : COCKPIT HUD & DUAL-CHANNEL MAP RECEIVER");
     Serial.println("========================================================");
-    Serial.printf("[WI-FI TARGET] %s (Password: %s)\n", g_activeSsid.c_str(), g_activePass.c_str());
     Serial.printf("[WI-FI SOFTAP] SSID: %s | Pass: %s\n", ap_ssid, ap_pass);
     Serial.printf("[COCKPIT HUD ] Port 8080 (Companion Socket OPEN)\n");
     Serial.printf("[HTTP SERVER ] Port 80   (http://192.168.4.1/map)\n");
@@ -726,16 +681,6 @@ void setup() {
 }
 
 void loop() {
-    // 1. Pantau status koneksi Wi-Fi STA (Hanya rekoneksi jika TIDAK ada HP yang tersambung ke SoftAP)
-    static uint32_t s_lastWifiCheck = 0;
-    if (millis() - s_lastWifiCheck > 12000) {
-        s_lastWifiCheck = millis();
-        if (WiFi.status() != WL_CONNECTED && WiFi.softAPgetStationNum() == 0 && !g_hudClient.connected()) {
-            Serial.printf("[WI-FI STA] Mencoba rekoneksi ke %s...\n", g_activeSsid.c_str());
-            WiFi.disconnect();
-            WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
-        }
-    }
 
     // 2. Terima packet dari Companion App via Socket 8080
     processHudSocket();
