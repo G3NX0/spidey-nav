@@ -3,7 +3,9 @@
 #include <TFT_eSPI.h>
 #include <TJpg_Decoder.h>
 #include <WiFi.h>
+#include "esp_wifi.h"
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include "test_map_jpg.h"
 
 // ============================================================================
@@ -13,19 +15,21 @@
 // Protocol 1: TCP Port 8080 - High-Speed JSON Stream from Flutter Companion
 // Protocol 2: HTTP Port 80   - Binary JPEG /map Stream (Web / Python Testbench)
 // Protocol 3: USB-CDC Serial - High-Speed Binary Stream (0xAA 0x55 [H] [L] [JPEG])
+// NVS Storage: Stores Hotspot SSID & Password across motorcycle power cycles
 // ============================================================================
 
 TFT_eSPI tft = TFT_eSPI();
 WiFiServer tcpMapServer(80);
 WiFiServer hudServer(8080);
 WiFiClient g_hudClient;
+Preferences g_prefs;
 
 // --- 16-bit 565 Colors (Strict 3-Tone Spidey Palette) ---
 constexpr uint16_t COLOR_BG_NAVY     = 0x08A5; // #0D1527 Deep Obsidian Midnight
 constexpr uint16_t COLOR_SPIDEY_RED  = 0xE104; // #E62429 Crimson Red
 constexpr uint16_t COLOR_TEXT_WHITE  = 0xFFFF; // #F0F4F8 Pure Crisp White
-constexpr uint16_t COLOR_EMERALD     = 0x07E0; // #00E676 GPS Locked
-constexpr uint16_t COLOR_AMBER       = 0xFD20; // #FFAB00 GPS Searching
+constexpr uint16_t COLOR_EMERALD     = 0x07E0; // #00E676 GPS Locked / Net Connected
+constexpr uint16_t COLOR_AMBER       = 0xFD20; // #FFAB00 GPS Searching / Connecting
 constexpr uint16_t COLOR_CYAN        = 0x07FF; // Cyan Accent
 constexpr uint16_t COLOR_CARD_BORDER = 0x2128; // Subtle glass outline
 constexpr uint16_t COLOR_WEB_LINE    = 0x31E9; // Dim web vector grid
@@ -54,14 +58,18 @@ struct HudState {
 };
 
 static HudState g_hud;
-static uint8_t  g_rotation       = 1; // 1: Landscape (default), 0: Portrait
+static uint8_t  g_rotation        = 1; // 1: Landscape (default), 0: Portrait
 static bool     g_idleStaticDrawn = false;
-static uint32_t g_lastIdleTickMs = 0;
-static uint32_t g_lastMapFrameMs = 0;
-static bool     g_mapModeActive  = false;
-static float    g_measuredFps    = 0.0f;
-static uint32_t g_frameCount     = 0;
-static uint32_t g_lastFrameMs    = 0;
+static uint32_t g_lastIdleTickMs  = 0;
+static uint32_t g_lastMapFrameMs  = 0;
+static bool     g_mapModeActive   = false;
+static float    g_measuredFps     = 0.0f;
+static uint32_t g_frameCount      = 0;
+static uint32_t g_lastFrameMs     = 0;
+
+static String g_activeSsid = "logolo";
+static String g_activePass = "rpl11rpl";
+static wl_status_t g_lastWifiStatus = WL_IDLE_STATUS;
 
 // TJpg_Decoder Callback: Direct MCU Stream to SPI
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
@@ -132,16 +140,15 @@ void drawCyberHudFrame() {
     tft.drawPixel(w - 11, h - 11, COLOR_TEXT_WHITE);
 
     // 2. Spider Web Geometry: 4 Diagonal Guide Lines (Stop before eyes!)
-    // Top-Left web ray
     tft.drawLine(14, 14, 80, 60, COLOR_WEB_LINE);
     tft.drawLine(80, 60, 95, 60, COLOR_WEB_LINE);
-    // Top-Right web ray
+
     tft.drawLine(w - 15, 14, w - 81, 60, COLOR_WEB_LINE);
     tft.drawLine(w - 81, 60, w - 96, 60, COLOR_WEB_LINE);
-    // Bottom-Left web ray
+
     tft.drawLine(14, h - 15, 80, h - 55, COLOR_WEB_LINE);
     tft.drawLine(80, h - 55, 95, h - 55, COLOR_WEB_LINE);
-    // Bottom-Right web ray
+
     tft.drawLine(w - 15, h - 15, w - 81, h - 55, COLOR_WEB_LINE);
     tft.drawLine(w - 81, h - 55, w - 96, h - 55, COLOR_WEB_LINE);
 
@@ -159,8 +166,8 @@ void drawCyberHudFrame() {
     tft.fillCircle(w / 2 + 82, 16, 3, COLOR_SPIDEY_RED);
 
     // 4. Bottom Connectivity Info Card
-    int pillW = min(280, w - 24);
-    int pillH = 36;
+    int pillW = min(290, w - 20);
+    int pillH = 38;
     int pillX = (w - pillW) / 2;
     int pillY = h - pillH - 8;
 
@@ -168,11 +175,24 @@ void drawCyberHudFrame() {
     tft.drawRoundRect(pillX, pillY, pillW, pillH, 8, COLOR_CARD_BORDER);
 
     tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(COLOR_CYAN, 0x1105);
-    tft.drawString("WIFI: SpideyNav-AP | PORT: 8080", w / 2, pillY + 11, 2);
 
-    tft.setTextColor(0x7BEF, 0x1105);
-    tft.drawString("MENUNGGU RUTE DARI HP...", w / 2, pillY + 25, 1);
+    if (WiFi.status() == WL_CONNECTED) {
+        char ipStr[64];
+        snprintf(ipStr, sizeof(ipStr), "IP: %s:8080", WiFi.localIP().toString().c_str());
+        tft.setTextColor(COLOR_EMERALD, 0x1105);
+        tft.drawString(ipStr, w / 2, pillY + 11, 2);
+
+        char netStr[64];
+        snprintf(netStr, sizeof(netStr), "NET: %s (INTERNET AKTIF)", g_activeSsid.c_str());
+        tft.setTextColor(COLOR_CYAN, 0x1105);
+        tft.drawString(netStr, w / 2, pillY + 26, 1);
+    } else {
+        tft.setTextColor(COLOR_CYAN, 0x1105);
+        tft.drawString("WIFI: SpideyNav-AP | PORT: 8080", w / 2, pillY + 11, 2);
+
+        tft.setTextColor(0x7BEF, 0x1105);
+        tft.drawString("MENUNGGU RUTE DARI HP...", w / 2, pillY + 26, 1);
+    }
 }
 
 // ============================================================================
@@ -313,19 +333,16 @@ void drawAuthenticSpideyEye(int cx, int cy, int eyeH, bool isLeft) {
     int sign = isLeft ? -1 : 1;
 
     // Authentic Spidey Eyepiece Geometry:
-    // P1: Outer top sharp apex
     int p1x = cx + sign * 54;
     int p1y = cy - eyeH;
 
-    // P2: Inner nose corner
     int p2x = cx + sign * 8;
     int p2y = cy + 2;
 
-    // P3: Outer lower cheek corner
     int p3x = cx + sign * 44;
     int p3y = cy + (int)(eyeH * 0.85f);
 
-    // Thick black/crimson carbon fiber outer contour
+    // Thick crimson outer contour
     tft.fillTriangle(p1x, p1y, p2x, p2y, p3x, p3y, COLOR_SPIDEY_RED);
 
     // Inner glowing white lens
@@ -483,6 +500,20 @@ void processHudSocket() {
                     tft.fillScreen(COLOR_BG_NAVY);
                 } else if (strcmp(type, "pwr") == 0) {
                     g_hud.isPowered    = doc["on"] | true;
+                } else if (strcmp(type, "cfg_wifi") == 0) {
+                    // Dynamic Hotspot Configuration from Companion App
+                    const char* newSsid = doc["ssid"] | "";
+                    const char* newPass = doc["pass"] | "";
+                    if (strlen(newSsid) > 0) {
+                        g_activeSsid = newSsid;
+                        g_activePass = newPass;
+                        g_prefs.putString("ssid", g_activeSsid);
+                        g_prefs.putString("pass", g_activePass);
+                        Serial.printf("[WIFI NVS] Menyimpan Hotspot Baru: %s\n", newSsid);
+                        WiFi.disconnect();
+                        WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
+                        g_idleStaticDrawn = false;
+                    }
                 }
             }
         }
@@ -599,13 +630,43 @@ void setup() {
     // Initial Welcome Splash
     renderMapFromBuffer(TEST_MAP_JPG, TEST_MAP_JPG_LEN);
 
-    // Wi-Fi SoftAP Setup (Mitigasi Brownout 8.5 dBm)
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    // Inisialisasi NVS Storage untuk SSID & Password Hotspot
+    g_prefs.begin("spidey_net", false);
+    g_activeSsid = g_prefs.getString("ssid", "logolo");
+    g_activePass = g_prefs.getString("pass", "rpl11rpl");
 
+    // Wi-Fi Setup: Dual-Mode (STA ke Hotspot/Router + AP Cadangan)
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.setTxPower(WIFI_POWER_17dBm); // RF power optimal untuk stabilitas WPA2/WPA3
+    WiFi.setAutoReconnect(true);
+
+    // Event listener untuk monitoring detail koneksi
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            Serial.printf("\n>>> [WI-FI TERHUBUNG] IP Lokal: %s <<<\n", WiFi.localIP().toString().c_str());
+            Serial.printf(">>> HP & Laptop dapat kirim data ke: %s:8080 <<<\n", WiFi.localIP().toString().c_str());
+            g_idleStaticDrawn = false;
+        } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            Serial.printf("[WI-FI STA] Terputus (reason: %d). Mencoba rekoneksi...\n", info.wifi_sta_disconnected.reason);
+        }
+    });
+
+    // Inisialisasi SoftAP cadangan di Channel 1 (selaras dengan logolo)
     const char* ap_ssid = "SpideyNav-AP";
     const char* ap_pass = "12345678";
-    WiFi.softAP(ap_ssid, ap_pass);
+    WiFi.softAP(ap_ssid, ap_pass, 1);
+
+    // Mulai koneksi ke Hotspot target dengan konfigurasi WPA3 H2E + Hunt-and-Peck
+    Serial.printf("\n[WI-FI STA] Menyambungkan ke: %s ...\n", g_activeSsid.c_str());
+    WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
+    wifi_config_t staConf;
+    if (esp_wifi_get_config(WIFI_IF_STA, &staConf) == ESP_OK) {
+        staConf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; // Dukung Hotspot HP WPA3 H2E & WPA2
+        staConf.sta.pmf_cfg.capable = true;
+        staConf.sta.pmf_cfg.required = false;
+        esp_wifi_set_config(WIFI_IF_STA, &staConf);
+        esp_wifi_connect();
+    }
 
     tcpMapServer.begin();
     hudServer.begin();
@@ -613,6 +674,7 @@ void setup() {
     Serial.println("\n========================================================");
     Serial.println(" SPIDEY-NAV : COCKPIT HUD & DUAL-CHANNEL MAP RECEIVER");
     Serial.println("========================================================");
+    Serial.printf("[WI-FI TARGET] %s (Password: %s)\n", g_activeSsid.c_str(), g_activePass.c_str());
     Serial.printf("[WI-FI SOFTAP] SSID: %s | Pass: %s\n", ap_ssid, ap_pass);
     Serial.printf("[COCKPIT HUD ] Port 8080 (Companion Socket OPEN)\n");
     Serial.printf("[HTTP SERVER ] Port 80   (http://192.168.4.1/map)\n");
@@ -622,16 +684,35 @@ void setup() {
 }
 
 void loop() {
-    // 1. Terima packet dari Companion App via Socket 8080
+    // 1. Pantau status koneksi Wi-Fi STA dan rekoneksi periodik jika belum terhubung
+    static uint32_t s_lastWifiCheck = 0;
+    if (millis() - s_lastWifiCheck > 8000) {
+        s_lastWifiCheck = millis();
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.printf("[WI-FI STA] Reconnecting ke %s...\n", g_activeSsid.c_str());
+            WiFi.disconnect();
+            WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
+            wifi_config_t retryConf;
+            if (esp_wifi_get_config(WIFI_IF_STA, &retryConf) == ESP_OK) {
+                retryConf.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+                retryConf.sta.pmf_cfg.capable = true;
+                retryConf.sta.pmf_cfg.required = false;
+                esp_wifi_set_config(WIFI_IF_STA, &retryConf);
+                esp_wifi_connect();
+            }
+        }
+    }
+
+    // 2. Terima packet dari Companion App via Socket 8080
     processHudSocket();
 
-    // 2. Terima stream JPEG via Wi-Fi Port 80
+    // 3. Terima stream JPEG via Wi-Fi Port 80
     processHttpMapServer();
 
-    // 3. Terima stream JPEG via USB CDC Serial
+    // 4. Terima stream JPEG via USB CDC Serial
     processSerialStream();
 
-    // 4. Engine Render Layar (Prioritas: Map aktif > Navigasi Aktif > Standby Idle)
+    // 5. Engine Render Layar (Prioritas: Map aktif > Navigasi Aktif > Standby Idle)
     uint32_t now = millis();
 
     if (g_mapModeActive) {
@@ -654,7 +735,7 @@ void loop() {
         }
     }
 
-    // 5. Tombol Fisik
+    // 6. Tombol Fisik
     // Tombol BOOT (GPIO 0): Tekan untuk ganti rotasi layar (Landscape <-> Portrait)
     if (btnBenchmark.wasPressed()) {
         g_rotation = (g_rotation == 1) ? 0 : (g_rotation == 0 ? 3 : 1);
