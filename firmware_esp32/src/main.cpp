@@ -656,7 +656,7 @@ void setup() {
         Serial.printf("[WI-FI SCAN WARNING] SSID '%s' tidak terdeteksi dalam jangkauan!\n", g_activeSsid.c_str());
     }
 
-    // Wi-Fi Setup: Mulai dengan mode STA murni tanpa sleep untuk jabat tangan optimal
+    // Wi-Fi Setup: Mode STA murni, tanpa sleep, daya RF maksimal
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     esp_wifi_set_ps(WIFI_PS_NONE);
@@ -677,10 +677,10 @@ void setup() {
                   g_activeSsid.c_str(), g_activePass.c_str());
     WiFi.begin(g_activeSsid.c_str(), g_activePass.c_str());
 
-    // Beri waktu 5 detik untuk jabat tangan STA murni
+    // Beri waktu hingga 15 detik agar jabat tangan WPA2 & DHCP IP selesai sempurna
     uint32_t tConnStart = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - tConnStart < 5000)) {
-        delay(200);
+    while (WiFi.status() != WL_CONNECTED && (millis() - tConnStart < 15000)) {
+        delay(400);
         Serial.print(".");
     }
     Serial.println();
@@ -689,12 +689,12 @@ void setup() {
     const char* ap_pass = "12345678";
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[WI-FI] Sukses terhubung ke Hotspot! SoftAP cadangan tetap siaga.");
+        Serial.println("[WI-FI] Sukses terhubung ke Hotspot logolo! IP diperoleh.");
     } else {
-        Serial.println("[WI-FI] Hotspot belum terhubung. Mengaktifkan mode Dual AP_STA...");
+        Serial.println("[WI-FI] Timeout 15s. Mengaktifkan mode Dual AP_STA sebagai cadangan...");
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP(ap_ssid, ap_pass);
     }
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(ap_ssid, ap_pass);
 
     tcpMapServer.begin();
     hudServer.begin();
