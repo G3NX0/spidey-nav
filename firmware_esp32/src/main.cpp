@@ -9,7 +9,7 @@
 // ============================================================================
 // SPIDEY-NAV : COCKPIT HUD & DUAL-STREAM RECEIVER (WI-FI + SERIAL)
 // ============================================================================
-// Platform: ESP32-C3 Super Mini + 2.4" SPI TFT (ILI9341 320x240 Landscape)
+// Platform: ESP32-C3 Super Mini + 2.4" SPI TFT (ILI9341 320x240)
 // Protocol 1: TCP Port 8080 - High-Speed JSON Stream from Flutter Companion
 // Protocol 2: HTTP Port 80   - Binary JPEG /map Stream (Web / Python Testbench)
 // Protocol 3: USB-CDC Serial - High-Speed Binary Stream (0xAA 0x55 [H] [L] [JPEG])
@@ -26,16 +26,18 @@ constexpr uint16_t COLOR_SPIDEY_RED  = 0xE104; // #E62429 Crimson Red
 constexpr uint16_t COLOR_TEXT_WHITE  = 0xFFFF; // #F0F4F8 Pure Crisp White
 constexpr uint16_t COLOR_EMERALD     = 0x07E0; // #00E676 GPS Locked
 constexpr uint16_t COLOR_AMBER       = 0xFD20; // #FFAB00 GPS Searching
+constexpr uint16_t COLOR_CYAN        = 0x07FF; // Cyan Accent
 constexpr uint16_t COLOR_CARD_BORDER = 0x2128; // Subtle glass outline
+constexpr uint16_t COLOR_WEB_LINE    = 0x31E9; // Dim web vector grid
 
 // --- Static Buffer untuk JPEG Masuk ---
 constexpr size_t MAX_JPG_BUFFER = 32768;
 static uint8_t   g_rxBuffer[MAX_JPG_BUFFER];
 
 // --- Hardware Input Pins ---
-constexpr uint8_t HW_BTN_MODE   = 0; // GPIO 0 (Boot button Super Mini)
-constexpr uint8_t HW_BTN_ACTION = 1; // GPIO 1
-constexpr uint8_t HW_BTN_STRESS = 4; // GPIO 4
+constexpr uint8_t HW_BTN_MODE   = 0; // GPIO 0 (Boot button Super Mini) -> Toggle Rotasi Layar
+constexpr uint8_t HW_BTN_ACTION = 1; // GPIO 1 -> Toggle Mode Malam (Invert)
+constexpr uint8_t HW_BTN_STRESS = 4; // GPIO 4 -> Diagnostics
 constexpr uint8_t HW_LED_SYS    = 8; // Onboard LED (Active LOW)
 
 // --- State Navigasi HUD ---
@@ -52,6 +54,8 @@ struct HudState {
 };
 
 static HudState g_hud;
+static uint8_t  g_rotation       = 1; // 1: Landscape (default), 0: Portrait
+static bool     g_idleStaticDrawn = false;
 static uint32_t g_lastIdleTickMs = 0;
 static uint32_t g_lastMapFrameMs = 0;
 static bool     g_mapModeActive  = false;
@@ -98,11 +102,84 @@ static ButtonDebouncer btnOverlay(HW_BTN_ACTION);
 static ButtonDebouncer btnStress(HW_BTN_STRESS);
 
 // ============================================================================
+// CYBERNETIC HUD & SPIDER WEB GEOMETRY (Drawn once per mode change)
+// ============================================================================
+
+void drawCyberHudFrame() {
+    int w = tft.width();
+    int h = tft.height();
+
+    // 1. Angular Corner Brackets (Spidey Crimson)
+    int bl = 24; // bracket length
+    // Top-Left
+    tft.drawLine(8, 8, 8 + bl, 8, COLOR_SPIDEY_RED);
+    tft.drawLine(8, 8, 8, 8 + bl, COLOR_SPIDEY_RED);
+    tft.drawPixel(10, 10, COLOR_TEXT_WHITE);
+
+    // Top-Right
+    tft.drawLine(w - 9, 8, w - 9 - bl, 8, COLOR_SPIDEY_RED);
+    tft.drawLine(w - 9, 8, w - 9, 8 + bl, COLOR_SPIDEY_RED);
+    tft.drawPixel(w - 11, 10, COLOR_TEXT_WHITE);
+
+    // Bottom-Left
+    tft.drawLine(8, h - 9, 8 + bl, h - 9, COLOR_SPIDEY_RED);
+    tft.drawLine(8, h - 9, 8, h - 9 - bl, COLOR_SPIDEY_RED);
+    tft.drawPixel(10, h - 11, COLOR_TEXT_WHITE);
+
+    // Bottom-Right
+    tft.drawLine(w - 9, h - 9, w - 9 - bl, h - 9, COLOR_SPIDEY_RED);
+    tft.drawLine(w - 9, h - 9, w - 9, h - 9 - bl, COLOR_SPIDEY_RED);
+    tft.drawPixel(w - 11, h - 11, COLOR_TEXT_WHITE);
+
+    // 2. Spider Web Geometry: 4 Diagonal Guide Lines (Stop before eyes!)
+    // Top-Left web ray
+    tft.drawLine(14, 14, 80, 60, COLOR_WEB_LINE);
+    tft.drawLine(80, 60, 95, 60, COLOR_WEB_LINE);
+    // Top-Right web ray
+    tft.drawLine(w - 15, 14, w - 81, 60, COLOR_WEB_LINE);
+    tft.drawLine(w - 81, 60, w - 96, 60, COLOR_WEB_LINE);
+    // Bottom-Left web ray
+    tft.drawLine(14, h - 15, 80, h - 55, COLOR_WEB_LINE);
+    tft.drawLine(80, h - 55, 95, h - 55, COLOR_WEB_LINE);
+    // Bottom-Right web ray
+    tft.drawLine(w - 15, h - 15, w - 81, h - 55, COLOR_WEB_LINE);
+    tft.drawLine(w - 81, h - 55, w - 96, h - 55, COLOR_WEB_LINE);
+
+    // Concentric Web Arc Segments (Subtle framing)
+    tft.drawLine(40, 24, 75, 24, COLOR_WEB_LINE);
+    tft.drawLine(24, 40, 24, 75, COLOR_WEB_LINE);
+    tft.drawLine(w - 41, 24, w - 76, 24, COLOR_WEB_LINE);
+    tft.drawLine(w - 25, 40, w - 25, 75, COLOR_WEB_LINE);
+
+    // 3. Top Header Bar
+    tft.setTextDatum(TC_DATUM);
+    tft.setTextColor(COLOR_TEXT_WHITE, COLOR_BG_NAVY);
+    tft.drawString("SPIDEY-NAV COCKPIT", w / 2, 10, 2);
+    tft.fillCircle(w / 2 - 82, 16, 3, COLOR_SPIDEY_RED);
+    tft.fillCircle(w / 2 + 82, 16, 3, COLOR_SPIDEY_RED);
+
+    // 4. Bottom Connectivity Info Card
+    int pillW = min(280, w - 24);
+    int pillH = 36;
+    int pillX = (w - pillW) / 2;
+    int pillY = h - pillH - 8;
+
+    tft.fillRoundRect(pillX, pillY, pillW, pillH, 8, 0x1105);
+    tft.drawRoundRect(pillX, pillY, pillW, pillH, 8, COLOR_CARD_BORDER);
+
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(COLOR_CYAN, 0x1105);
+    tft.drawString("WIFI: SpideyNav-AP | PORT: 8080", w / 2, pillY + 11, 2);
+
+    tft.setTextColor(0x7BEF, 0x1105);
+    tft.drawString("MENUNGGU RUTE DARI HP...", w / 2, pillY + 25, 1);
+}
+
+// ============================================================================
 // HUD VECTOR RENDERING ENGINE (Flicker-Free, No Full Screen Refresh)
 // ============================================================================
 
 void drawTurnArrow(int trn, int cx, int cy) {
-    // Clear arrow bounding box (100x100)
     tft.fillRect(cx - 50, cy - 50, 100, 100, COLOR_BG_NAVY);
 
     switch (trn) {
@@ -159,6 +236,11 @@ void drawTurnArrow(int trn, int cx, int cy) {
 }
 
 void renderActiveNavHUD() {
+    int w = tft.width();
+    int h = tft.height();
+    int cx = w / 2;
+    int cy = h / 2;
+
     static int s_lastTrn = -1;
     static int s_lastDist = -1;
     static int s_lastSpd = -1;
@@ -167,8 +249,8 @@ void renderActiveNavHUD() {
     // Header Card: Jarak manuver belokan
     if (g_hud.distMeters != s_lastDist) {
         s_lastDist = g_hud.distMeters;
-        tft.fillRoundRect(12, 10, 296, 44, 12, 0x1105);
-        tft.drawRoundRect(12, 10, 296, 44, 12, COLOR_SPIDEY_RED);
+        tft.fillRoundRect(12, 10, w - 24, 44, 12, 0x1105);
+        tft.drawRoundRect(12, 10, w - 24, 44, 12, COLOR_SPIDEY_RED);
 
         tft.setTextDatum(MC_DATUM);
         tft.setTextColor(COLOR_TEXT_WHITE, 0x1105);
@@ -179,13 +261,13 @@ void renderActiveNavHUD() {
         } else {
             snprintf(distStr, sizeof(distStr), "%.1f KM MENUJU BELOKAN", s_lastDist / 1000.0f);
         }
-        tft.drawString(distStr, 160, 32, 4);
+        tft.drawString(distStr, cx, 32, 4);
     }
 
     // Center: Panah Belokan Spidey
     if (g_hud.turnCode != s_lastTrn) {
         s_lastTrn = g_hud.turnCode;
-        drawTurnArrow(s_lastTrn, 160, 122);
+        drawTurnArrow(s_lastTrn, cx, cy);
     }
 
     // Bottom Speedometer & GPS Status Bar
@@ -193,30 +275,32 @@ void renderActiveNavHUD() {
         s_lastSpd = g_hud.speed;
         s_lastGps = g_hud.gpsStatus;
 
+        int boxW = (w - 32) / 2;
         // Speedometer Box (Kiri Bawah)
-        tft.fillRoundRect(12, 182, 140, 48, 10, 0x1105);
-        tft.drawRoundRect(12, 182, 140, 48, 10, COLOR_CARD_BORDER);
+        tft.fillRoundRect(12, h - 58, boxW, 48, 10, 0x1105);
+        tft.drawRoundRect(12, h - 58, boxW, 48, 10, COLOR_CARD_BORDER);
 
         tft.setTextDatum(ML_DATUM);
         tft.setTextColor(COLOR_TEXT_WHITE, 0x1105);
         char spdStr[16];
         snprintf(spdStr, sizeof(spdStr), "%d", s_lastSpd);
-        tft.drawString(spdStr, 24, 206, 6); // Large font
-        tft.drawString("KM/H", 94, 208, 2);
+        tft.drawString(spdStr, 24, h - 34, 6);
+        tft.drawString("KM/H", 24 + 68, h - 32, 2);
 
         // GPS & Status Pill (Kanan Bawah)
-        tft.fillRoundRect(168, 182, 140, 48, 10, 0x1105);
-        tft.drawRoundRect(168, 182, 140, 48, 10, COLOR_CARD_BORDER);
+        int rightX = 12 + boxW + 8;
+        tft.fillRoundRect(rightX, h - 58, boxW, 48, 10, 0x1105);
+        tft.drawRoundRect(rightX, h - 58, boxW, 48, 10, COLOR_CARD_BORDER);
 
         tft.setTextDatum(MC_DATUM);
         if (s_lastGps == 1) {
-            tft.fillCircle(186, 206, 6, COLOR_EMERALD);
+            tft.fillCircle(rightX + 18, h - 34, 6, COLOR_EMERALD);
             tft.setTextColor(COLOR_EMERALD, 0x1105);
-            tft.drawString("GPS LOCKED", 242, 206, 2);
+            tft.drawString("GPS LOCKED", rightX + boxW / 2 + 10, h - 34, 2);
         } else {
-            tft.fillCircle(186, 206, 6, COLOR_AMBER);
+            tft.fillCircle(rightX + 18, h - 34, 6, COLOR_AMBER);
             tft.setTextColor(COLOR_AMBER, 0x1105);
-            tft.drawString("SEARCHING...", 242, 206, 2);
+            tft.drawString("SEARCHING...", rightX + boxW / 2 + 10, h - 34, 2);
         }
     }
 }
@@ -225,24 +309,62 @@ void renderActiveNavHUD() {
 // STANDBY IDLE ANIMATIONS (Spider Eyes, Web Radar, Pulse Sonar, Speedo)
 // ============================================================================
 
+void drawAuthenticSpideyEye(int cx, int cy, int eyeH, bool isLeft) {
+    int sign = isLeft ? -1 : 1;
+
+    // Authentic Spidey Eyepiece Geometry:
+    // P1: Outer top sharp apex
+    int p1x = cx + sign * 54;
+    int p1y = cy - eyeH;
+
+    // P2: Inner nose corner
+    int p2x = cx + sign * 8;
+    int p2y = cy + 2;
+
+    // P3: Outer lower cheek corner
+    int p3x = cx + sign * 44;
+    int p3y = cy + (int)(eyeH * 0.85f);
+
+    // Thick black/crimson carbon fiber outer contour
+    tft.fillTriangle(p1x, p1y, p2x, p2y, p3x, p3y, COLOR_SPIDEY_RED);
+
+    // Inner glowing white lens
+    int insetX = sign * 4;
+    int insetY = 3;
+    tft.fillTriangle(p1x - insetX, p1y + insetY,
+                     p2x - insetX, p2y - 1,
+                     p3x - insetX, p3y - insetY,
+                     COLOR_TEXT_WHITE);
+
+    // Sharp outer border outline
+    tft.drawTriangle(p1x, p1y, p2x, p2y, p3x, p3y, COLOR_TEXT_WHITE);
+}
+
 void renderIdleScreen(int mode, float t) {
-    constexpr int cx = 160;
-    constexpr int cy = 110;
+    int w = tft.width();
+    int h = tft.height();
+    int cx = w / 2;
+    int cy = h / 2 - 4;
+
+    // Gambar frame cybernetic & web garis sekali saja per mode
+    if (!g_idleStaticDrawn) {
+        tft.fillScreen(COLOR_BG_NAVY);
+        drawCyberHudFrame();
+        g_idleStaticDrawn = true;
+    }
 
     switch (mode) {
-        case 0: { // Spider Eyes Blinking
+        case 0: { // Spider Eyes Blinking (Authentic Spider Mask Shape)
             float blink = (sinf(t * 6.28f) * 0.5f + 0.5f);
-            int eyeH = 16 + (int)(blink * 14.0f);
+            int eyeH = 14 + (int)(blink * 16.0f);
 
-            tft.fillRect(cx - 65, cy - 35, 130, 70, COLOR_BG_NAVY);
+            // Bersihkan hanya bounding box mata (tidak menghapus garis web di sekelilingnya!)
+            tft.fillRect(cx - 68, cy - 35, 136, 72, COLOR_BG_NAVY);
 
             // Left Eye
-            tft.fillTriangle(cx - 50, cy - eyeH, cx - 10, cy, cx - 42, cy + (int)(eyeH * 0.8f), COLOR_TEXT_WHITE);
-            tft.drawTriangle(cx - 50, cy - eyeH, cx - 10, cy, cx - 42, cy + (int)(eyeH * 0.8f), COLOR_SPIDEY_RED);
-
+            drawAuthenticSpideyEye(cx, cy, eyeH, true);
             // Right Eye
-            tft.fillTriangle(cx + 50, cy - eyeH, cx + 10, cy, cx + 42, cy + (int)(eyeH * 0.8f), COLOR_TEXT_WHITE);
-            tft.drawTriangle(cx + 50, cy - eyeH, cx + 10, cy, cx + 42, cy + (int)(eyeH * 0.8f), COLOR_SPIDEY_RED);
+            drawAuthenticSpideyEye(cx, cy, eyeH, false);
             break;
         }
         case 1: { // Expanding Spider Web Radar
@@ -251,7 +373,6 @@ void renderIdleScreen(int mode, float t) {
 
             if (abs(r - lastR) > 3) {
                 tft.fillCircle(cx, cy, 60, COLOR_BG_NAVY);
-                // 8 radial web axes
                 for (int i = 0; i < 8; i++) {
                     float rad = i * (3.14159f / 4.0f);
                     tft.drawLine(cx, cy, cx + (int)(cosf(rad) * 55), cy + (int)(sinf(rad) * 55), 0x4228);
@@ -274,20 +395,16 @@ void renderIdleScreen(int mode, float t) {
             }
             break;
         }
-        default: { // Digital HUD Clock / Speedo Standby
+        default: { // Digital HUD Standby
+            tft.fillRect(cx - 70, cy - 30, 140, 60, COLOR_BG_NAVY);
             tft.setTextDatum(MC_DATUM);
             tft.setTextColor(COLOR_TEXT_WHITE, COLOR_BG_NAVY);
-            tft.drawString("SPIDEY COCKPIT", cx, cy - 25, 4);
+            tft.drawString("SPIDEY HUD", cx, cy - 14, 4);
             tft.setTextColor(COLOR_SPIDEY_RED, COLOR_BG_NAVY);
-            tft.drawString("STANDBY", cx, cy + 12, 4);
+            tft.drawString("STANDBY", cx, cy + 16, 4);
             break;
         }
     }
-
-    // Status Footer di Layar Standby
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(0x7BEF, COLOR_BG_NAVY);
-    tft.drawString("MENUNGGU RUTE DARI HP...", cx, 215, 2);
 }
 
 // ============================================================================
@@ -319,18 +436,25 @@ void renderMapFromBuffer(const uint8_t* buf, size_t len) {
 // ============================================================================
 
 void processHudSocket() {
+    // 1. Terima client baru jika ada (selalu timpa client lama agar tidak freeze!)
     if (hudServer.hasClient()) {
-        if (!g_hudClient || !g_hudClient.connected()) {
-            g_hudClient = hudServer.available();
+        WiFiClient newClient = hudServer.available();
+        if (newClient) {
+            if (g_hudClient && g_hudClient.connected()) {
+                g_hudClient.stop();
+            }
+            g_hudClient = newClient;
             g_hudClient.setNoDelay(true);
-            g_hudClient.setTimeout(200);
-            Serial.printf("[HUD SOCKET] Companion HP Terhubung dari %s:8080!\n",
+            g_hudClient.setTimeout(100);
+            Serial.printf("\n>>> [HUD SOCKET] HP BERHASIL TERHUBUNG DARI %s:8080! <<<\n",
                           g_hudClient.remoteIP().toString().c_str());
             tft.fillScreen(COLOR_BG_NAVY);
+            g_idleStaticDrawn = false;
             g_mapModeActive = false;
         }
     }
 
+    // 2. Baca data stream JSON dari HP
     if (g_hudClient && g_hudClient.connected()) {
         while (g_hudClient.available()) {
             String line = g_hudClient.readStringUntil('\n');
@@ -355,6 +479,7 @@ void processHudSocket() {
                     g_hud.idleMode     = doc["id"] | 0;
                     g_hud.turnCode     = 255;
                     g_hud.hasNewPacket = true;
+                    g_idleStaticDrawn  = false;
                     tft.fillScreen(COLOR_BG_NAVY);
                 } else if (strcmp(type, "pwr") == 0) {
                     g_hud.isPowered    = doc["on"] | true;
@@ -464,7 +589,7 @@ void setup() {
     Serial.setTimeout(20);
 
     tft.init();
-    tft.setRotation(1); // 320x240 Landscape
+    tft.setRotation(g_rotation); // Default 1: Landscape (320x240)
     tft.fillScreen(COLOR_BG_NAVY);
 
     TJpgDec.setJpgScale(1);
@@ -478,10 +603,6 @@ void setup() {
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
-    const char* sta_ssid = "logolo";
-    const char* sta_pass = "rpl11rpl";
-    WiFi.begin(sta_ssid, sta_pass);
-
     const char* ap_ssid = "SpideyNav-AP";
     const char* ap_pass = "12345678";
     WiFi.softAP(ap_ssid, ap_pass);
@@ -493,8 +614,8 @@ void setup() {
     Serial.println(" SPIDEY-NAV : COCKPIT HUD & DUAL-CHANNEL MAP RECEIVER");
     Serial.println("========================================================");
     Serial.printf("[WI-FI SOFTAP] SSID: %s | Pass: %s\n", ap_ssid, ap_pass);
-    Serial.printf("[COCKPIT HUD ] Port 8080 (Companion Socket)\n");
-    Serial.printf("[HTTP SERVER ] Port 80   (http://%s/map)\n", WiFi.softAPIP().toString().c_str());
+    Serial.printf("[COCKPIT HUD ] Port 8080 (Companion Socket OPEN)\n");
+    Serial.printf("[HTTP SERVER ] Port 80   (http://192.168.4.1/map)\n");
     Serial.println("--------------------------------------------------------");
 
     digitalWrite(HW_LED_SYS, LOW);
@@ -514,9 +635,9 @@ void loop() {
     uint32_t now = millis();
 
     if (g_mapModeActive) {
-        // Jika stream map aktif, tunggu hingga tidak ada map baru selama 3 detik
         if (now - g_lastMapFrameMs > 3000) {
             g_mapModeActive = false;
+            g_idleStaticDrawn = false;
             tft.fillScreen(COLOR_BG_NAVY);
         }
     } else {
@@ -525,7 +646,7 @@ void loop() {
             renderActiveNavHUD();
         } else {
             // Mode Standby Idle
-            if (now - g_lastIdleTickMs > 45) { // ~22 FPS refresh untuk animasi
+            if (now - g_lastIdleTickMs > 45) { // ~22 FPS refresh
                 g_lastIdleTickMs = now;
                 float t = (now % 10000) / 1000.0f;
                 renderIdleScreen(g_hud.idleMode, t);
@@ -534,10 +655,21 @@ void loop() {
     }
 
     // 5. Tombol Fisik
+    // Tombol BOOT (GPIO 0): Tekan untuk ganti rotasi layar (Landscape <-> Portrait)
     if (btnBenchmark.wasPressed()) {
+        g_rotation = (g_rotation == 1) ? 0 : (g_rotation == 0 ? 3 : 1);
+        tft.setRotation(g_rotation);
+        g_idleStaticDrawn = false;
+        tft.fillScreen(COLOR_BG_NAVY);
+        Serial.printf("[BTN GPIO 0] Ganti Rotasi Layar ke Mode %d (%dx%d)\n",
+                      g_rotation, tft.width(), tft.height());
+    }
+
+    // Tombol ACTION (GPIO 1): Invert Display (Mode Malam/Siang)
+    if (btnOverlay.wasPressed()) {
         static bool s_invert = false;
         s_invert = !s_invert;
         tft.invertDisplay(s_invert);
-        Serial.printf("[BTN GPIO 0] Invert Display: %s\n", s_invert ? "ON" : "OFF");
+        Serial.printf("[BTN GPIO 1] Invert Display: %s\n", s_invert ? "ON" : "OFF");
     }
 }
